@@ -1,5 +1,9 @@
 from datetime import datetime, timedelta, timezone
 import pytz
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 # Singapore timezone
 SGT = pytz.timezone('Asia/Singapore')
@@ -33,16 +37,35 @@ def sgt_to_utc(sgt_time):
     return sgt_time.astimezone(timezone.utc)
 
 def format_datetime(dt, include_seconds=True):
-    """Format datetime in a user-friendly way"""
+    """Format datetime in a user-friendly way with explicit SGT conversion"""
     if dt is None:
         return "N/A"
     
-    # Convert to SGT if it has timezone info
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(SGT)
-    
-    # Format with or without seconds
-    if include_seconds:
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
-    else:
-        return dt.strftime("%Y-%m-%d %H:%M")
+    try:
+        # Log the input datetime for debugging
+        logger.info(f"Original datetime: {dt}, tzinfo: {dt.tzinfo}")
+        
+        # Always assume naive datetimes are UTC
+        if dt.tzinfo is None:
+            logger.info("Converting naive datetime from UTC to SGT")
+            dt = datetime.replace(dt, tzinfo=timezone.utc)
+            dt = dt.astimezone(SGT)
+        else:
+            logger.info(f"Converting aware datetime from {dt.tzinfo} to SGT")
+            dt = dt.astimezone(SGT)
+        
+        # Log the converted datetime
+        logger.info(f"Converted to SGT: {dt}")
+        
+        # Add SGT indicator to the format
+        if include_seconds:
+            return dt.strftime("%Y-%m-%d %H:%M:%S (SGT)")
+        else:
+            return dt.strftime("%Y-%m-%d %H:%M (SGT)")
+    except Exception as e:
+        logger.error(f"Error formatting datetime: {e}")
+        # Fallback to simple formatting
+        if include_seconds:
+            return dt.strftime("%Y-%m-%d %H:%M:%S") + " (UTC)"
+        else:
+            return dt.strftime("%Y-%m-%d %H:%M") + " (UTC)"

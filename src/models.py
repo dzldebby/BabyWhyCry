@@ -5,6 +5,7 @@ from datetime import datetime
 import enum
 import os
 from dotenv import load_dotenv
+from utils import get_sgt_now
 
 # Load environment variables from config/.env
 config_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config')
@@ -62,7 +63,7 @@ class Feeding(Base):
     baby_id = Column(Integer, ForeignKey('babies.id'), nullable=False)
     # Use SQLAlchemy Enum type for both PostgreSQL and SQLite
     type = Column(Enum(FeedingType, native_enum=False))
-    start_time = Column(DateTime, default=datetime.utcnow)
+    start_time = Column(DateTime, default=get_sgt_now)
     end_time = Column(DateTime, nullable=True)
     amount = Column(Float, nullable=True)  # in ml or oz
     notes = Column(String(500), nullable=True)
@@ -78,7 +79,7 @@ class Sleep(Base):
 
     id = Column(Integer, primary_key=True)
     baby_id = Column(Integer, ForeignKey('babies.id'), nullable=False)
-    start_time = Column(DateTime, default=datetime.utcnow)
+    start_time = Column(DateTime, default=get_sgt_now)
     end_time = Column(DateTime, nullable=True)
     notes = Column(String(500), nullable=True)
     
@@ -100,7 +101,7 @@ class Diaper(Base):
     baby_id = Column(Integer, ForeignKey('babies.id'), nullable=False)
     # Use SQLAlchemy Enum type for both PostgreSQL and SQLite
     type = Column(Enum(DiaperType, native_enum=False))
-    time = Column(DateTime, default=datetime.utcnow)
+    time = Column(DateTime, default=get_sgt_now)
     notes = Column(String(500), nullable=True)
     
     # Relationships
@@ -120,7 +121,7 @@ class Crying(Base):
 
     id = Column(Integer, primary_key=True)
     baby_id = Column(Integer, ForeignKey('babies.id'), nullable=False)
-    start_time = Column(DateTime, default=datetime.utcnow)
+    start_time = Column(DateTime, default=get_sgt_now)
     end_time = Column(DateTime, nullable=True)
     # Use SQLAlchemy Enum type for both PostgreSQL and SQLite
     reason = Column(Enum(CryingReason, native_enum=False), nullable=True)
