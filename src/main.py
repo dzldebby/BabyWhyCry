@@ -6,8 +6,12 @@ from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
+# Add the project root to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from database import init_db
 import bot
+from server import start_server_thread
 
 # Configure logging
 logging.basicConfig(
@@ -74,6 +78,10 @@ def main():
     openai_key = os.environ.get("OPENAI_API_KEY")
     if not openai_key:
         logger.warning("No OPENAI_API_KEY provided! Natural language queries will not work.")
+    
+    # Start the web server for Render
+    logger.info("Starting web server for Render...")
+    start_server_thread()
     
     # Start the bot
     logger.info("Starting the Baby Alert bot...")
