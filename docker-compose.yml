@@ -1,0 +1,10 @@
+version: '3'
+
+services:
+  baby-alert:
+    build: .
+    volumes:
+      - ./data:/app/data
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+    restart: unless-stopped 
