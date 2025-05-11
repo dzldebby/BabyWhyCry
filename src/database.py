@@ -4,6 +4,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.engine import Engine
 from sqlalchemy import event
 import os
+import sys
 import datetime
 import logging
 from typing import List, Dict, Any, Optional
@@ -11,41 +12,64 @@ from datetime import datetime, timedelta
 from models import Base, User, Baby, Feeding, Sleep, Diaper, Crying
 from models import FeedingType, DiaperType, CryingReason
 from utils import get_sgt_now, utc_to_sgt, sgt_to_utc
+from dotenv import load_dotenv
 
 # Configure logging
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)  # Ensure logging is set to INFO level
+
+# Load environment variables from config/.env
+config_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config')
+env_path = os.path.join(config_dir, '.env')
+if os.path.exists(env_path):
+    logger.info(f"Loading environment variables from {env_path}")
+    load_dotenv(dotenv_path=env_path)
+    logger.info("Environment variables loaded")
+else:
+    logger.warning(f"Environment file not found at {env_path}, using environment variables as is")
 
 # Get database URL from environment or use SQLite as fallback
 DATABASE_URL = os.getenv("DATABASE_URL")
+logger.info(f"DATABASE_URL environment variable {'found' if DATABASE_URL else 'not found'}")
 
 # Check if we're using PostgreSQL or SQLite
 is_postgres = DATABASE_URL is not None
+logger.info(f"Using PostgreSQL? {is_postgres}")
 
 # Setup proper engine based on available database
 if DATABASE_URL:
     # Handle Supabase/PostgreSQL connection
     # Convert potential "postgres://" to "postgresql://" for SQLAlchemy
+    original_url = DATABASE_URL
     if DATABASE_URL.startswith("postgres://"):
         DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+        logger.info("Converted postgres:// to postgresql:// for SQLAlchemy compatibility")
     
-    engine = create_engine(DATABASE_URL)
+    # Hide password in logs but show host/database
+    masked_url = DATABASE_URL.replace(DATABASE_URL.split('@')[0].split(':', 2)[2], '****')
+    logger.info(f"Connecting to PostgreSQL database: {masked_url}")
+    
+    engine = create_engine(DATABASE_URL, echo=True)  # Enable SQL echoing
+    logger.info("PostgreSQL engine created with SQL echoing enabled")
     
     # PostgreSQL doesn't need this pragma
     @event.listens_for(Engine, "connect")
     def set_postgresql_schema(dbapi_connection, connection_record):
-        # Set search path if needed
-        # cursor = dbapi_connection.cursor()
-        # cursor.execute("SET search_path TO public")
-        # cursor.close()
-        pass
+        # Set search path if needed - ENABLE THIS FOR SUPABASE
+        cursor = dbapi_connection.cursor()
+        cursor.execute("SET search_path TO public")
+        cursor.close()
+        logger.info("PostgreSQL schema search path set to 'public'")
 else:
     # Fallback to SQLite for local development
     data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
     os.makedirs(data_dir, exist_ok=True)
     db_path = os.path.join(data_dir, 'baby_alert.db')
     SQLALCHEMY_DATABASE_URL = f"sqlite:///{db_path}"
+    logger.info(f"Using SQLite database at: {db_path}")
     
     engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+    logger.info("SQLite engine created")
     
     # Configure SQLite to enforce foreign key constraints
     @event.listens_for(Engine, "connect")
@@ -53,20 +77,33 @@ else:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
+        logger.info("SQLite foreign key constraints enabled")
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+logger.info("Database session factory created")
 
 def init_db():
     """Initialize the database by creating all tables."""
-    Base.metadata.create_all(bind=engine)
+    logger.info("Initializing database tables...")
+    try:
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database tables created successfully")
+    except Exception as e:
+        logger.error(f"Error creating database tables: {e}")
+        raise
 
 def get_db():
     """Get a database session."""
-    db = SessionLocal()
+    logger.info("Getting new database session")
     try:
+        db = SessionLocal()
+        logger.info("Database session created")
         return db
+    except Exception as e:
+        logger.error(f"Error creating database session: {e}")
+        raise
     finally:
-        db.close()
+        logger.info("Database session will be closed when the caller is done")
 
 # User operations
 def create_user(db, username: str, email: str) -> User:
@@ -130,21 +167,53 @@ def delete_baby(db, baby_id: int) -> bool:
 # Feeding operations
 def start_feeding(db, baby_id: int, feeding_type: FeedingType) -> Feeding:
     """Start a feeding session."""
-    # Convert enum to string if using PostgreSQL
-    if is_postgres:
-        feeding_type_val = to_enum_string(feeding_type)  # Converts FeedingType.BREAST to "breast"
-    else:
-        feeding_type_val = feeding_type  # SQLite can store the enum object directly
+    logger.info(f"Starting feeding for baby_id={baby_id}, type={feeding_type}")
+    
+    try:
+        # When using PostgreSQL, we should NOT convert the enum to string
+        # PostgreSQL's enum type will handle the conversion automatically
+        # Just keep the original enum object
+        feeding_type_val = feeding_type
+        logger.info(f"Using feeding type: {feeding_type_val}")
+            
+        # Log the current time before creating the Feeding object
+        current_time = get_sgt_now()
+        logger.info(f"Current time for feeding start: {current_time}")
         
-    feeding = Feeding(
-        baby_id=baby_id,
-        type=feeding_type_val,  # This is either a string or enum depending on database
-        start_time=get_sgt_now()
-    )
-    db.add(feeding)
-    db.commit()
-    db.refresh(feeding)
-    return feeding
+        feeding = Feeding(
+            baby_id=baby_id,
+            type=feeding_type_val,
+            start_time=current_time
+        )
+        logger.info(f"Created feeding object with baby_id={baby_id}, type={feeding_type_val}")
+        
+        logger.info("Adding feeding to database session...")
+        db.add(feeding)
+        
+        logger.info("Committing feeding to database...")
+        try:
+            db.commit()
+            logger.info("Successfully committed feeding to database")
+        except Exception as commit_error:
+            logger.error(f"Error committing feeding to database: {commit_error}")
+            db.rollback()
+            raise
+        
+        logger.info("Refreshing feeding object from database...")
+        try:
+            db.refresh(feeding)
+            logger.info(f"Successfully refreshed feeding, id={feeding.id}")
+        except Exception as refresh_error:
+            logger.error(f"Error refreshing feeding from database: {refresh_error}")
+            raise
+        
+        return feeding
+    except Exception as e:
+        logger.error(f"Unexpected error in start_feeding: {e}")
+        # Try to get a traceback
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise
 
 def end_feeding(db, feeding_id: int, amount: Optional[float] = None) -> Feeding:
     """End a feeding session."""
@@ -181,11 +250,9 @@ def end_sleep(db, sleep_id: int) -> Sleep:
 # Diaper operations
 def log_diaper_change(db, baby_id: int, diaper_type: DiaperType) -> Diaper:
     """Log a diaper change."""
-    # Convert enum to string if using PostgreSQL
-    if is_postgres:
-        diaper_type_val = to_enum_string(diaper_type)
-    else:
-        diaper_type_val = diaper_type
+    # Don't convert enum to string - use the enum directly
+    diaper_type_val = diaper_type
+    logger.info(f"Using diaper type: {diaper_type_val}")
         
     diaper = Diaper(
         baby_id=baby_id,
@@ -215,80 +282,163 @@ def end_crying(db, crying_id: int, actual_reason: Optional[CryingReason] = None)
     if crying and not crying.end_time:
         crying.end_time = get_sgt_now()
         if actual_reason:
-            # Convert enum to string if using PostgreSQL
-            if is_postgres:
-                crying.actual_reason = to_enum_string(actual_reason)
-            else:
-                crying.actual_reason = actual_reason
+            # Don't convert enum to string - use directly
+            crying.actual_reason = actual_reason
         db.commit()
         db.refresh(crying)
     return crying
 
+# Add this helper function before get_recent_events
+def safe_enum_conversion(value, enum_class):
+    """
+    Safely converts a value to an enum object if it's a string,
+    or returns the original enum object if it already is one.
+    """
+    logger.info(f"Converting value: {value}, type: {type(value)}")
+    
+    # If it's already an enum instance, return it
+    if isinstance(value, enum_class):
+        logger.info(f"Value is already an enum instance: {value}")
+        return value
+        
+    # If it's a string, try to convert it to enum
+    if isinstance(value, str):
+        for e in enum_class:
+            if e.value == value or e.name == value:
+                logger.info(f"Converted string '{value}' to enum: {e}")
+                return e
+                
+    # Return None for null/None values
+    if value is None:
+        return None
+        
+    # If we can't convert, log error and return a default
+    logger.error(f"Couldn't convert '{value}' to {enum_class.__name__} enum")
+    return None
+
 # Event retrieval
 def get_recent_events(db, baby_id: int, limit: int = 10, days: int = 7) -> List[Dict[str, Any]]:
     """Get recent events for a baby."""
+    logger.info(f"Retrieving recent events for baby_id={baby_id}, limit={limit}, days={days}")
     since = get_sgt_now() - timedelta(days=days)
     
-    # Get recent feedings
-    feedings = db.query(Feeding).filter(
-        Feeding.baby_id == baby_id,
-        Feeding.start_time >= since
-    ).order_by(Feeding.start_time.desc()).limit(limit).all()
-    
-    # Get recent sleeps
-    sleeps = db.query(Sleep).filter(
-        Sleep.baby_id == baby_id,
-        Sleep.start_time >= since
-    ).order_by(Sleep.start_time.desc()).limit(limit).all()
-    
-    # Get recent diapers
-    diapers = db.query(Diaper).filter(
-        Diaper.baby_id == baby_id,
-        Diaper.time >= since
-    ).order_by(Diaper.time.desc()).limit(limit).all()
-    
-    # Get recent crying episodes
-    cryings = db.query(Crying).filter(
-        Crying.baby_id == baby_id,
-        Crying.start_time >= since
-    ).order_by(Crying.start_time.desc()).limit(limit).all()
-    
-    # Combine all events and sort by time
-    events = []
-    
-    for feeding in feedings:
-        events.append({
-            "type": "feeding",
-            "time": feeding.start_time,
-            "data": feeding
-        })
-    
-    for sleep in sleeps:
-        events.append({
-            "type": "sleep",
-            "time": sleep.start_time,
-            "data": sleep
-        })
-    
-    for diaper in diapers:
-        events.append({
-            "type": "diaper",
-            "time": diaper.time,
-            "data": diaper
-        })
-    
-    for crying in cryings:
-        events.append({
-            "type": "crying",
-            "time": crying.start_time,
-            "data": crying
-        })
-    
-    # Sort by time (most recent first)
-    events.sort(key=lambda x: x["time"], reverse=True)
-    
-    # Limit the number of events
-    return events[:limit]
+    try:
+        # Get recent feedings
+        logger.info("Retrieving recent feedings...")
+        feedings_query = db.query(Feeding).filter(
+            Feeding.baby_id == baby_id,
+            Feeding.start_time >= since
+        ).order_by(Feeding.start_time.desc()).limit(limit)
+        
+        # Manually fetch and process feeding data to handle potential enum conversion issues
+        raw_feedings = []
+        for f in feedings_query:
+            try:
+                raw_feedings.append(f)
+            except Exception as e:
+                logger.error(f"Error processing feeding record: {e}")
+        
+        logger.info(f"Found {len(raw_feedings)} feeding records")
+        
+        # Get recent sleeps
+        logger.info("Retrieving recent sleeps...")
+        sleeps = db.query(Sleep).filter(
+            Sleep.baby_id == baby_id,
+            Sleep.start_time >= since
+        ).order_by(Sleep.start_time.desc()).limit(limit).all()
+        logger.info(f"Found {len(sleeps)} sleep records")
+        
+        # Get recent diapers
+        logger.info("Retrieving recent diapers...")
+        diapers_query = db.query(Diaper).filter(
+            Diaper.baby_id == baby_id,
+            Diaper.time >= since
+        ).order_by(Diaper.time.desc()).limit(limit)
+        
+        # Manually fetch and process diaper data
+        raw_diapers = []
+        for d in diapers_query:
+            try:
+                raw_diapers.append(d)
+            except Exception as e:
+                logger.error(f"Error processing diaper record: {e}")
+                
+        logger.info(f"Found {len(raw_diapers)} diaper records")
+        
+        # Get recent crying episodes
+        logger.info("Retrieving recent crying episodes...")
+        cryings_query = db.query(Crying).filter(
+            Crying.baby_id == baby_id,
+            Crying.start_time >= since
+        ).order_by(Crying.start_time.desc()).limit(limit)
+        
+        # Manually fetch and process crying data
+        raw_cryings = []
+        for c in cryings_query:
+            try:
+                raw_cryings.append(c)
+            except Exception as e:
+                logger.error(f"Error processing crying record: {e}")
+                
+        logger.info(f"Found {len(raw_cryings)} crying records")
+        
+        # Combine all events and sort by time
+        events = []
+        
+        for feeding in raw_feedings:
+            try:
+                logger.info(f"Adding feeding event: id={feeding.id}, type={feeding.type}")
+                events.append({
+                    "type": "feeding",
+                    "time": feeding.start_time,
+                    "data": feeding
+                })
+            except Exception as e:
+                logger.error(f"Error adding feeding to events: {e}")
+        
+        for sleep in sleeps:
+            try:
+                logger.info(f"Adding sleep event: id={sleep.id}")
+                events.append({
+                    "type": "sleep",
+                    "time": sleep.start_time,
+                    "data": sleep
+                })
+            except Exception as e:
+                logger.error(f"Error adding sleep to events: {e}")
+        
+        for diaper in raw_diapers:
+            try:
+                logger.info(f"Adding diaper event: id={diaper.id}, type={diaper.type}")
+                events.append({
+                    "type": "diaper",
+                    "time": diaper.time,
+                    "data": diaper
+                })
+            except Exception as e:
+                logger.error(f"Error adding diaper to events: {e}")
+        
+        for crying in raw_cryings:
+            try:
+                logger.info(f"Adding crying event: id={crying.id}")
+                events.append({
+                    "type": "crying",
+                    "time": crying.start_time,
+                    "data": crying
+                })
+            except Exception as e:
+                logger.error(f"Error adding crying to events: {e}")
+        
+        # Sort by time (most recent first)
+        events.sort(key=lambda x: x["time"], reverse=True)
+        
+        # Limit the number of events
+        return events[:limit]
+    except Exception as e:
+        logger.error(f"Error retrieving recent events: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return []
 
 def get_baby_stats(db, baby_id: int, days: int = 1) -> Dict[str, Any]:
     """Get statistics for a baby over a period of days."""
@@ -322,42 +472,23 @@ def get_baby_stats(db, baby_id: int, days: int = 1) -> Dict[str, Any]:
         Diaper.time >= since
     ).scalar()
     
-    if is_postgres:
-        wet_diapers = db.query(func.count(Diaper.id)).filter(
-            Diaper.baby_id == baby_id,
-            Diaper.time >= since,
-            Diaper.type == DiaperType.WET.value
-        ).scalar()
-        
-        dirty_diapers = db.query(func.count(Diaper.id)).filter(
-            Diaper.baby_id == baby_id,
-            Diaper.time >= since,
-            Diaper.type == DiaperType.DIRTY.value
-        ).scalar()
-        
-        both_diapers = db.query(func.count(Diaper.id)).filter(
-            Diaper.baby_id == baby_id,
-            Diaper.time >= since,
-            Diaper.type == DiaperType.BOTH.value
-        ).scalar()
-    else:
-        wet_diapers = db.query(func.count(Diaper.id)).filter(
-            Diaper.baby_id == baby_id,
-            Diaper.time >= since,
-            Diaper.type == DiaperType.WET
-        ).scalar()
-        
-        dirty_diapers = db.query(func.count(Diaper.id)).filter(
-            Diaper.baby_id == baby_id,
-            Diaper.time >= since,
-            Diaper.type == DiaperType.DIRTY
-        ).scalar()
-        
-        both_diapers = db.query(func.count(Diaper.id)).filter(
-            Diaper.baby_id == baby_id,
-            Diaper.time >= since,
-            Diaper.type == DiaperType.BOTH
-        ).scalar()
+    wet_diapers = db.query(func.count(Diaper.id)).filter(
+        Diaper.baby_id == baby_id,
+        Diaper.time >= since,
+        Diaper.type == DiaperType.WET
+    ).scalar()
+    
+    dirty_diapers = db.query(func.count(Diaper.id)).filter(
+        Diaper.baby_id == baby_id,
+        Diaper.time >= since,
+        Diaper.type == DiaperType.DIRTY
+    ).scalar()
+    
+    both_diapers = db.query(func.count(Diaper.id)).filter(
+        Diaper.baby_id == baby_id,
+        Diaper.time >= since,
+        Diaper.type == DiaperType.BOTH
+    ).scalar()
     
     # Crying episodes
     crying_count = db.query(func.count(Crying.id)).filter(
@@ -368,18 +499,11 @@ def get_baby_stats(db, baby_id: int, days: int = 1) -> Dict[str, Any]:
     # Crying reasons
     crying_reasons = {}
     for reason in CryingReason:
-        if is_postgres:
-            count = db.query(func.count(Crying.id)).filter(
-                Crying.baby_id == baby_id,
-                Crying.start_time >= since,
-                Crying.actual_reason == reason.value
-            ).scalar()
-        else:
-            count = db.query(func.count(Crying.id)).filter(
-                Crying.baby_id == baby_id,
-                Crying.start_time >= since,
-                Crying.actual_reason == reason
-            ).scalar()
+        count = db.query(func.count(Crying.id)).filter(
+            Crying.baby_id == baby_id,
+            Crying.start_time >= since,
+            Crying.actual_reason == reason
+        ).scalar()
         crying_reasons[reason.value] = count
     
     return {
@@ -396,27 +520,37 @@ def get_baby_stats(db, baby_id: int, days: int = 1) -> Dict[str, Any]:
 # NLP Query Functions
 def get_last_feeding(db, baby_id: int) -> Dict[str, Any]:
     """Get the most recent feeding for a baby."""
-    feeding = db.query(Feeding).filter(
-        Feeding.baby_id == baby_id
-    ).order_by(Feeding.start_time.desc()).first()
+    logger.info(f"Getting last feeding for baby_id={baby_id}")
     
-    if not feeding:
-        return {"found": False}
-    
-    result = {
-        "found": True,
-        "type": feeding.type if is_postgres else feeding.type.value,
-        "start_time": feeding.start_time,
-        "end_time": feeding.end_time,
-        "amount": feeding.amount
-    }
-    
-    # Calculate duration if end_time exists
-    if feeding.end_time:
-        duration_minutes = (feeding.end_time - feeding.start_time).total_seconds() / 60
-        result["duration_minutes"] = round(duration_minutes)
-    
-    return result
+    try:
+        query = db.query(Feeding).filter(Feeding.baby_id == baby_id).order_by(Feeding.start_time.desc())
+        logger.info(f"Query SQL: {query}")
+        
+        feeding = query.first()
+        
+        if not feeding:
+            logger.warning(f"No feeding records found for baby_id={baby_id}")
+            return {"found": False}
+        
+        logger.info(f"Found feeding record: id={feeding.id}, type={feeding.type}, time={feeding.start_time}")
+        
+        result = {
+            "found": True,
+            "type": feeding.type,
+            "start_time": feeding.start_time,
+            "end_time": feeding.end_time,
+            "amount": feeding.amount
+        }
+        
+        # Calculate duration if end_time exists
+        if feeding.end_time:
+            duration_minutes = (feeding.end_time - feeding.start_time).total_seconds() / 60
+            result["duration_minutes"] = round(duration_minutes)
+        
+        return result
+    except Exception as e:
+        logger.error(f"Error getting last feeding: {e}")
+        return {"found": False, "error": str(e)}
 
 def get_last_sleep(db, baby_id: int) -> Dict[str, Any]:
     """Get the most recent sleep session for a baby."""
@@ -457,7 +591,7 @@ def get_last_diaper(db, baby_id: int) -> Dict[str, Any]:
     
     return {
         "found": True,
-        "type": diaper.type if is_postgres else diaper.type.value,
+        "type": diaper.type,
         "time": diaper.time
     }
 
@@ -474,7 +608,7 @@ def get_last_crying(db, baby_id: int) -> Dict[str, Any]:
         "found": True,
         "start_time": crying.start_time,
         "end_time": crying.end_time,
-        "reason": crying.actual_reason if is_postgres else (crying.actual_reason.value if crying.actual_reason else None)
+        "reason": crying.actual_reason
     }
     
     # Calculate duration if end_time exists
@@ -500,69 +634,38 @@ def get_feeding_count(db, baby_id: int, start_time: datetime = None, end_time: d
     if not end_time:
         end_time = get_sgt_now()
     
-    # Count by type
-    if is_postgres:
-        breast_count = db.query(func.count(Feeding.id)).filter(
-            Feeding.baby_id == baby_id,
-            Feeding.start_time >= start_time,
-            Feeding.start_time <= end_time,
-            Feeding.type == FeedingType.BREAST.value  # Use "breast" (string value)
-        ).scalar()
-        
-        bottle_count = db.query(func.count(Feeding.id)).filter(
-            Feeding.baby_id == baby_id,
-            Feeding.start_time >= start_time,
-            Feeding.start_time <= end_time,
-            Feeding.type == FeedingType.BOTTLE.value  # Use "bottle" (string value)
-        ).scalar()
-        
-        solid_count = db.query(func.count(Feeding.id)).filter(
-            Feeding.baby_id == baby_id,
-            Feeding.start_time >= start_time,
-            Feeding.start_time <= end_time,
-            Feeding.type == FeedingType.SOLID.value  # Use "solid" (string value)
-        ).scalar()
-    else:
-        breast_count = db.query(func.count(Feeding.id)).filter(
-            Feeding.baby_id == baby_id,
-            Feeding.start_time >= start_time,
-            Feeding.start_time <= end_time,
-            Feeding.type == FeedingType.BREAST  # Use FeedingType.BREAST (enum object)
-        ).scalar()
-        
-        bottle_count = db.query(func.count(Feeding.id)).filter(
-            Feeding.baby_id == baby_id,
-            Feeding.start_time >= start_time,
-            Feeding.start_time <= end_time,
-            Feeding.type == FeedingType.BOTTLE
-        ).scalar()
-        
-        solid_count = db.query(func.count(Feeding.id)).filter(
-            Feeding.baby_id == baby_id,
-            Feeding.start_time >= start_time,
-            Feeding.start_time <= end_time,
-            Feeding.type == FeedingType.SOLID
-        ).scalar()
+    # Count by type - use enum directly for both PostgreSQL and SQLite
+    breast_count = db.query(func.count(Feeding.id)).filter(
+        Feeding.baby_id == baby_id,
+        Feeding.start_time >= start_time,
+        Feeding.start_time <= end_time,
+        Feeding.type == FeedingType.BREAST
+    ).scalar()
+    
+    bottle_count = db.query(func.count(Feeding.id)).filter(
+        Feeding.baby_id == baby_id,
+        Feeding.start_time >= start_time,
+        Feeding.start_time <= end_time,
+        Feeding.type == FeedingType.BOTTLE
+    ).scalar()
+    
+    solid_count = db.query(func.count(Feeding.id)).filter(
+        Feeding.baby_id == baby_id,
+        Feeding.start_time >= start_time,
+        Feeding.start_time <= end_time,
+        Feeding.type == FeedingType.SOLID
+    ).scalar()
     
     total_count = breast_count + bottle_count + solid_count
     
     # Get total amount for bottle feedings
-    if is_postgres:
-        total_amount = db.query(func.sum(Feeding.amount)).filter(
-            Feeding.baby_id == baby_id,
-            Feeding.start_time >= start_time,
-            Feeding.start_time <= end_time,
-            Feeding.type == FeedingType.BOTTLE.value,
-            Feeding.amount != None
-        ).scalar() or 0
-    else:
-        total_amount = db.query(func.sum(Feeding.amount)).filter(
-            Feeding.baby_id == baby_id,
-            Feeding.start_time >= start_time,
-            Feeding.start_time <= end_time,
-            Feeding.type == FeedingType.BOTTLE,
-            Feeding.amount != None
-        ).scalar() or 0
+    total_amount = db.query(func.sum(Feeding.amount)).filter(
+        Feeding.baby_id == baby_id,
+        Feeding.start_time >= start_time,
+        Feeding.start_time <= end_time,
+        Feeding.type == FeedingType.BOTTLE,
+        Feeding.amount != None
+    ).scalar() or 0
     
     return {
         "total_count": total_count,
@@ -625,49 +728,27 @@ def get_diaper_count(db, baby_id: int, start_time: datetime = None, end_time: da
     if not end_time:
         end_time = get_sgt_now()
     
-    # Count by type
-    if is_postgres:
-        wet_count = db.query(func.count(Diaper.id)).filter(
-            Diaper.baby_id == baby_id,
-            Diaper.time >= start_time,
-            Diaper.time <= end_time,
-            Diaper.type == DiaperType.WET.value  # String value
-        ).scalar()
-        
-        dirty_count = db.query(func.count(Diaper.id)).filter(
-            Diaper.baby_id == baby_id,
-            Diaper.time >= start_time,
-            Diaper.time <= end_time,
-            Diaper.type == DiaperType.DIRTY.value  # String value
-        ).scalar()
-        
-        both_count = db.query(func.count(Diaper.id)).filter(
-            Diaper.baby_id == baby_id,
-            Diaper.time >= start_time,
-            Diaper.time <= end_time,
-            Diaper.type == DiaperType.BOTH.value  # String value
-        ).scalar()
-    else:
-        wet_count = db.query(func.count(Diaper.id)).filter(
-            Diaper.baby_id == baby_id,
-            Diaper.time >= start_time,
-            Diaper.time <= end_time,
-            Diaper.type == DiaperType.WET  # Enum object
-        ).scalar()
-        
-        dirty_count = db.query(func.count(Diaper.id)).filter(
-            Diaper.baby_id == baby_id,
-            Diaper.time >= start_time,
-            Diaper.time <= end_time,
-            Diaper.type == DiaperType.DIRTY  # Enum object
-        ).scalar()
-        
-        both_count = db.query(func.count(Diaper.id)).filter(
-            Diaper.baby_id == baby_id,
-            Diaper.time >= start_time,
-            Diaper.time <= end_time,
-            Diaper.type == DiaperType.BOTH  # Enum object
-        ).scalar()
+    # Count by type - use enum directly for both PostgreSQL and SQLite
+    wet_count = db.query(func.count(Diaper.id)).filter(
+        Diaper.baby_id == baby_id,
+        Diaper.time >= start_time,
+        Diaper.time <= end_time,
+        Diaper.type == DiaperType.WET
+    ).scalar()
+    
+    dirty_count = db.query(func.count(Diaper.id)).filter(
+        Diaper.baby_id == baby_id,
+        Diaper.time >= start_time,
+        Diaper.time <= end_time,
+        Diaper.type == DiaperType.DIRTY
+    ).scalar()
+    
+    both_count = db.query(func.count(Diaper.id)).filter(
+        Diaper.baby_id == baby_id,
+        Diaper.time >= start_time,
+        Diaper.time <= end_time,
+        Diaper.type == DiaperType.BOTH
+    ).scalar()
     
     total_count = wet_count + dirty_count + both_count
     
@@ -807,6 +888,10 @@ def to_enum_value(enum_str, enum_class):
 
 def to_enum_string(enum_val):
     """Convert enum to string value if needed"""
+    logger.info(f"Converting enum value: {enum_val}, type: {type(enum_val)}")
     if hasattr(enum_val, 'value'):
-        return enum_val.value
+        result = enum_val.value
+        logger.info(f"Converted enum to string: '{result}'")
+        return result
+    logger.info(f"Value already a string: '{enum_val}'")
     return enum_val 

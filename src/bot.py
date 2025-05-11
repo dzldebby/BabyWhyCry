@@ -382,36 +382,59 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         text = "📝 *Recent Events*\n\n"
         
         for event in events:
-            event_type = event["type"]
-            event_time = format_datetime(event["time"], include_seconds=False)
-            data = event["data"]
-            
-            if event_type == "feeding":
-                text += f"🍼 *Feeding* ({data.type.value}) at {event_time}\n"
-                if data.end_time:
-                    duration = (data.end_time - data.start_time).total_seconds() / 60
-                    text += f"   Duration: {duration:.0f} minutes\n"
-                if data.amount:
-                    text += f"   Amount: {data.amount} ml/oz\n"
-            
-            elif event_type == "sleep":
-                text += f"💤 *Sleep* started at {event_time}\n"
-                if data.end_time:
-                    duration = (data.end_time - data.start_time).total_seconds() / 60
-                    text += f"   Duration: {duration:.0f} minutes\n"
-            
-            elif event_type == "diaper":
-                text += f"💩 *Diaper* ({data.type.value}) at {event_time}\n"
-            
-            elif event_type == "crying":
-                text += f"👶 *Crying* started at {event_time}\n"
-                if data.end_time:
-                    duration = (data.end_time - data.start_time).total_seconds() / 60
-                    text += f"   Duration: {duration:.0f} minutes\n"
-                if data.actual_reason:
-                    text += f"   Reason: {data.actual_reason.value}\n"
-            
-            text += "\n"
+            try:
+                event_type = event["type"]
+                event_time = format_datetime(event["time"], include_seconds=False)
+                data = event["data"]
+                
+                if event_type == "feeding":
+                    # Safely access type value, handling both enum and string
+                    feeding_type = data.type
+                    if hasattr(feeding_type, 'value'):
+                        feeding_type_str = feeding_type.value
+                    else:
+                        feeding_type_str = str(feeding_type)
+                    
+                    text += f"🍼 *Feeding* ({feeding_type_str}) at {event_time}\n"
+                    if data.end_time:
+                        duration = (data.end_time - data.start_time).total_seconds() / 60
+                        text += f"   Duration: {duration:.0f} minutes\n"
+                    if data.amount:
+                        text += f"   Amount: {data.amount} ml/oz\n"
+                
+                elif event_type == "sleep":
+                    text += f"💤 *Sleep* started at {event_time}\n"
+                    if data.end_time:
+                        duration = (data.end_time - data.start_time).total_seconds() / 60
+                        text += f"   Duration: {duration:.0f} minutes\n"
+                
+                elif event_type == "diaper":
+                    # Safely access type value, handling both enum and string
+                    diaper_type = data.type
+                    if hasattr(diaper_type, 'value'):
+                        diaper_type_str = diaper_type.value
+                    else:
+                        diaper_type_str = str(diaper_type)
+                        
+                    text += f"💩 *Diaper* ({diaper_type_str}) at {event_time}\n"
+                
+                elif event_type == "crying":
+                    text += f"👶 *Crying* started at {event_time}\n"
+                    if data.end_time:
+                        duration = (data.end_time - data.start_time).total_seconds() / 60
+                        text += f"   Duration: {duration:.0f} minutes\n"
+                    if data.actual_reason:
+                        # Safely access reason value, handling both enum and string
+                        reason = data.actual_reason
+                        if hasattr(reason, 'value'):
+                            reason_str = reason.value
+                        else:
+                            reason_str = str(reason)
+                        text += f"   Reason: {reason_str}\n"
+                
+                text += "\n"
+            except Exception as e:
+                logger.error(f"Error formatting event: {e}")
         
         keyboard = [
             [InlineKeyboardButton("↩️ Back to Menu", callback_data="back_to_menu")]

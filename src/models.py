@@ -4,6 +4,13 @@ from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 import enum
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from config/.env
+config_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config')
+env_path = os.path.join(config_dir, '.env')
+if os.path.exists(env_path):
+    load_dotenv(dotenv_path=env_path)
 
 Base = declarative_base()
 
@@ -53,8 +60,8 @@ class Feeding(Base):
 
     id = Column(Integer, primary_key=True)
     baby_id = Column(Integer, ForeignKey('babies.id'), nullable=False)
-    # Use string type for PostgreSQL compatibility
-    type = Column(String(10) if is_postgres else Enum(FeedingType))
+    # Use SQLAlchemy Enum type for both PostgreSQL and SQLite
+    type = Column(Enum(FeedingType, native_enum=False))
     start_time = Column(DateTime, default=datetime.utcnow)
     end_time = Column(DateTime, nullable=True)
     amount = Column(Float, nullable=True)  # in ml or oz
@@ -91,8 +98,8 @@ class Diaper(Base):
 
     id = Column(Integer, primary_key=True)
     baby_id = Column(Integer, ForeignKey('babies.id'), nullable=False)
-    # Use string type for PostgreSQL compatibility 
-    type = Column(String(10) if is_postgres else Enum(DiaperType))
+    # Use SQLAlchemy Enum type for both PostgreSQL and SQLite
+    type = Column(Enum(DiaperType, native_enum=False))
     time = Column(DateTime, default=datetime.utcnow)
     notes = Column(String(500), nullable=True)
     
@@ -115,11 +122,11 @@ class Crying(Base):
     baby_id = Column(Integer, ForeignKey('babies.id'), nullable=False)
     start_time = Column(DateTime, default=datetime.utcnow)
     end_time = Column(DateTime, nullable=True)
-    # Use string type for PostgreSQL compatibility
-    reason = Column(String(15) if is_postgres else Enum(CryingReason), nullable=True)
-    predicted_reason = Column(String(15) if is_postgres else Enum(CryingReason), nullable=True)
+    # Use SQLAlchemy Enum type for both PostgreSQL and SQLite
+    reason = Column(Enum(CryingReason, native_enum=False), nullable=True)
+    predicted_reason = Column(Enum(CryingReason, native_enum=False), nullable=True)
     prediction_confidence = Column(Float, nullable=True)  # 0-100%
-    actual_reason = Column(String(15) if is_postgres else Enum(CryingReason), nullable=True)  # User feedback
+    actual_reason = Column(Enum(CryingReason, native_enum=False), nullable=True)  # User feedback
     notes = Column(String(500), nullable=True)
     
     # Relationships
