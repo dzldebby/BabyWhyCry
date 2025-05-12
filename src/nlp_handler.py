@@ -4,6 +4,7 @@ import logging
 from typing import Dict, Any, List, Optional, Tuple
 import json
 from datetime import datetime, timedelta
+from utils import format_datetime, utc_to_sgt
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -232,7 +233,44 @@ def generate_response(intent: str, data: Dict[str, Any], query_text: str) -> str
                     type_str = feeding_type.value
                 else:
                     type_str = str(feeding_type)
-                return f"The last feeding ({type_str}) was at {feeding_time}."
+                
+                # Format the time in SGT
+                formatted_time = format_datetime(feeding_time, include_seconds=False)
+                return f"The last feeding ({type_str}) was at {formatted_time}."
+                
+        elif intent == "last_sleep" and data.get("found", False):
+            sleep_time = data.get("start_time")
+            if sleep_time:
+                formatted_time = format_datetime(sleep_time, include_seconds=False)
+                
+                if data.get("is_ongoing", False):
+                    return f"Baby started sleeping at {formatted_time} and is still sleeping. Duration so far: {data.get('duration_minutes', 0)} minutes."
+                else:
+                    return f"Baby last slept at {formatted_time} for {data.get('duration_minutes', 0)} minutes."
+                    
+        elif intent == "last_diaper" and data.get("found", False):
+            diaper_time = data.get("time")
+            diaper_type = data.get("type")
+            if diaper_time and diaper_type:
+                if hasattr(diaper_type, 'value'):
+                    type_str = diaper_type.value
+                else:
+                    type_str = str(diaper_type)
+                    
+                formatted_time = format_datetime(diaper_time, include_seconds=False)
+                return f"The last diaper change ({type_str}) was at {formatted_time}."
+                
+        elif intent == "last_crying" and data.get("found", False):
+            crying_time = data.get("start_time")
+            if crying_time:
+                formatted_time = format_datetime(crying_time, include_seconds=False)
+                
+                if data.get("is_ongoing", False):
+                    return f"Baby started crying at {formatted_time} and is still crying. Duration so far: {data.get('duration_minutes', 0)} minutes."
+                else:
+                    reason = data.get("reason")
+                    reason_str = reason.value if hasattr(reason, 'value') else str(reason) if reason else "unknown reason"
+                    return f"Baby last cried at {formatted_time} for {data.get('duration_minutes', 0)} minutes. Reason: {reason_str}."
             
         return "I'm sorry, I couldn't process your question with the AI. But I found the data you requested. Please check the history section for details."
 
