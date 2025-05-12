@@ -1,11 +1,44 @@
 import os
 import openai
+import logging
 from typing import Dict, Any, List, Optional, Tuple
 import json
 from datetime import datetime, timedelta
 
+# Configure logging
+logger = logging.getLogger(__name__)
+
 # Configure OpenAI API
-openai.api_key = os.environ.get("OPENAI_API_KEY")
+api_key = os.environ.get("OPENAI_API_KEY")
+if api_key:
+    logger.info(f"OpenAI API key found with length: {len(api_key)}")
+    openai.api_key = api_key
+else:
+    logger.error("OpenAI API key not found in environment variables!")
+
+# Test OpenAI API connection
+def test_openai_connection():
+    """Test if the OpenAI API connection works"""
+    if not openai.api_key:
+        logger.error("Cannot test OpenAI connection: No API key provided")
+        return False
+        
+    try:
+        logger.info("Testing OpenAI API connection...")
+        response = openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hello"}],
+            max_tokens=5
+        )
+        logger.info(f"OpenAI API connection successful: {response.choices[0].message.content}")
+        return True
+    except Exception as e:
+        logger.error(f"OpenAI API connection test failed: {str(e)}")
+        return False
+
+# Run test on import
+openai_available = test_openai_connection()
+logger.info(f"OpenAI API available: {openai_available}")
 
 # Define query intents
 class QueryIntent:
@@ -38,6 +71,17 @@ def classify_query(query_text: str) -> Tuple[str, Dict[str, Any]]:
         Tuple containing (intent, parameters)
     """
     try:
+        # First try simple rule-based classification if it's an obvious query
+        simple_intent = classify_query_simple(query_text)
+        if simple_intent[0] != QueryIntent.UNKNOWN:
+            logger.info(f"Classified query using simple rules: {simple_intent[0]}")
+            return simple_intent
+            
+        # If simple classification didn't work, try OpenAI
+        if not openai.api_key:
+            logger.warning("OpenAI API key not available, using simple classification only")
+            return simple_intent
+            
         # Prepare the system prompt
         system_prompt = """
         You are an AI assistant that analyzes queries about baby care events. 
@@ -70,6 +114,8 @@ def classify_query(query_text: str) -> Tuple[str, Dict[str, Any]]:
         }
         """
         
+        logger.info("Calling OpenAI API for query classification")
+        
         # Make the API call to OpenAI
         response = openai.chat.completions.create(
             model="gpt-3.5-turbo",  # You can use a different model if needed
@@ -83,12 +129,47 @@ def classify_query(query_text: str) -> Tuple[str, Dict[str, Any]]:
         
         # Parse the response
         result = json.loads(response.choices[0].message.content)
+        logger.info(f"Successfully classified query with OpenAI: {result['intent']}")
         
         return result["intent"], result.get("parameters", {})
         
     except Exception as e:
-        print(f"Error classifying query: {e}")
-        return QueryIntent.UNKNOWN, {}
+        logger.error(f"Error classifying query with OpenAI: {str(e)}")
+        # Fall back to simple classification
+        return classify_query_simple(query_text)
+
+def classify_query_simple(query_text: str) -> Tuple[str, Dict[str, Any]]:
+    """Simple rule-based classifier when OpenAI is unavailable"""
+    query = query_text.lower()
+    
+    if any(phrase in query for phrase in ["last feeding", "recent feeding", "when feeding", "last feed"]):
+        return QueryIntent.LAST_FEEDING, {}
+        
+    elif any(phrase in query for phrase in ["last sleep", "recent sleep", "when sleep", "last slept"]):
+        return QueryIntent.LAST_SLEEP, {}
+        
+    elif any(phrase in query for phrase in ["last diaper", "recent diaper", "when diaper", "last change"]):
+        return QueryIntent.LAST_DIAPER, {}
+        
+    elif any(phrase in query for phrase in ["last crying", "recent crying", "when cry", "last cried"]):
+        return QueryIntent.LAST_CRYING, {}
+        
+    elif any(phrase in query for phrase in ["how many feeding", "feeding count", "number of feeding", "feedings"]):
+        return QueryIntent.FEEDING_COUNT, {}
+        
+    elif any(phrase in query for phrase in ["sleep duration", "how long sleep", "sleep time"]):
+        return QueryIntent.SLEEP_DURATION, {}
+        
+    elif any(phrase in query for phrase in ["diaper count", "how many diaper", "number of diaper"]):
+        return QueryIntent.DIAPER_COUNT, {}
+        
+    elif any(phrase in query for phrase in ["crying episode", "how many cry", "number of cry"]):
+        return QueryIntent.CRYING_EPISODES, {}
+        
+    elif any(phrase in query for phrase in ["schedule", "routine", "pattern"]):
+        return QueryIntent.BABY_SCHEDULE, {}
+    
+    return QueryIntent.UNKNOWN, {}
 
 def generate_response(intent: str, data: Dict[str, Any], query_text: str) -> str:
     """
@@ -122,6 +203,8 @@ def generate_response(intent: str, data: Dict[str, Any], query_text: str) -> str
         Available data: {data_str}
         """
         
+        logger.info(f"Calling OpenAI API for response generation with intent: {intent}")
+        
         # Make the API call to OpenAI
         response = openai.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -133,11 +216,25 @@ def generate_response(intent: str, data: Dict[str, Any], query_text: str) -> str
             max_tokens=200
         )
         
-        return response.choices[0].message.content.strip()
+        result = response.choices[0].message.content.strip()
+        logger.info(f"Successfully generated response from OpenAI")
+        return result
         
     except Exception as e:
-        print(f"Error generating response: {e}")
-        return "I'm sorry, I couldn't process your question. Please try asking in a different way."
+        logger.error(f"Error generating response with OpenAI: {str(e)}")
+        
+        # If we have data, provide a simple response based on the intent
+        if intent == "last_feeding" and data.get("found", False):
+            feeding_time = data.get("start_time")
+            feeding_type = data.get("type")
+            if feeding_time and feeding_type:
+                if hasattr(feeding_type, 'value'):
+                    type_str = feeding_type.value
+                else:
+                    type_str = str(feeding_type)
+                return f"The last feeding ({type_str}) was at {feeding_time}."
+            
+        return "I'm sorry, I couldn't process your question with the AI. But I found the data you requested. Please check the history section for details."
 
 def parse_time_period(time_period: str) -> Tuple[datetime, datetime]:
     """
