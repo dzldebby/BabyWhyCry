@@ -11,6 +11,14 @@ class SimpleHandler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'text/html')
         self.end_headers()
         self.wfile.write(b'Baby Alert Bot is running!')
+        logger.info(f"Handled GET request from {self.client_address[0]} for path: {self.path}")
+    
+    def do_HEAD(self):
+        """Handle HEAD requests - this is what UptimeRobot uses for monitoring"""
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        logger.info(f"Handled HEAD request from {self.client_address[0]} for path: {self.path}")
         
     def log_message(self, format, *args):
         # Override to avoid cluttering logs with HTTP requests
@@ -20,6 +28,7 @@ def run_server():
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(('0.0.0.0', port), SimpleHandler)
     logger.info(f"Starting web server on port {port}")
+    logger.info(f"Health check URL: http://0.0.0.0:{port}/")
     server.serve_forever()
 
 def start_server_thread():
