@@ -78,8 +78,41 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     
     context.user_data["user_id"] = db_user.id
     
+    # Check for deep link parameter
+    args = context.args
+    deep_link = args[0] if args else None
+    
+    # Handle quick bottle feed deep link
+    if deep_link == "quick_bottle" and "baby_id" in context.user_data:
+        baby_id = context.user_data["baby_id"]
+        baby = db.query(Baby).filter(Baby.id == baby_id).first()
+        
+        if baby:
+            # Start a bottle feeding
+            try:
+                feeding = start_feeding(db, baby_id, FeedingType.BOTTLE)
+                context.user_data["current_feeding_id"] = feeding.id
+                await update.message.reply_text(
+                    f"✅ Quick bottle feeding started for {baby.name}!\n\n"
+                    "I'll ask for the amount when you're done. To end the feeding, "
+                    "tap the button below or send /done",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✅ Done Feeding", callback_data="done_feeding")]
+                    ])
+                )
+                return FEEDING
+            except Exception as e:
+                logger.error(f"Error starting quick bottle feeding: {e}")
+                await update.message.reply_text(
+                    "Sorry, there was an error starting the feeding. Please try again."
+                )
+                return await menu_command(update, context)
+        else:
+            await update.message.reply_text(
+                "You need to select a baby first before using quick feeding."
+            )
     # Check if user has babies
-    if not db_user.babies:
+    elif not db_user.babies:
         await update.message.reply_text(
             "Welcome to Baby Alert! 👶\n\n"
             "Looks like you don't have any babies registered yet. "
@@ -105,7 +138,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "🤖 *Baby Alert Bot Commands*\n\n"
         "/start - Start the bot and select a baby\n"
         "/help - Show this help message\n"
-        "/menu - Show the main menu\n\n"
+        "/menu - Show the main menu\n"
+        "/quick_bottle - Start a quick bottle feeding\n\n"
         "*What can this bot do?*\n"
         "- Track feedings (breast, bottle, solid)\n"
         "- Track sleep periods\n"
@@ -120,6 +154,44 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Use the buttons to navigate and record baby events!"
     )
     await update.message.reply_text(help_text, parse_mode='Markdown')
+
+async def quick_bottle_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Start a quick bottle feeding."""
+    if "baby_id" not in context.user_data:
+        await update.message.reply_text(
+            "Please select a baby first using the /start command."
+        )
+        return await start(update, context)
+    
+    baby_id = context.user_data["baby_id"]
+    db = get_db()
+    baby = db.query(Baby).filter(Baby.id == baby_id).first()
+    
+    if not baby:
+        await update.message.reply_text(
+            "Sorry, I couldn't find your baby's information. Please select a baby first."
+        )
+        return await start(update, context)
+    
+    # Start a bottle feeding
+    try:
+        feeding = start_feeding(db, baby_id, FeedingType.BOTTLE)
+        context.user_data["current_feeding_id"] = feeding.id
+        await update.message.reply_text(
+            f"✅ Quick bottle feeding started for {baby.name}!\n\n"
+            "I'll ask for the amount when you're done. To end the feeding, "
+            "tap the button below or send /done",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Done Feeding", callback_data="done_feeding")]
+            ])
+        )
+        return FEEDING
+    except Exception as e:
+        logger.error(f"Error starting quick bottle feeding: {e}")
+        await update.message.reply_text(
+            "Sorry, there was an error starting the feeding. Please try again."
+        )
+        return await menu_command(update, context)
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Show the main menu."""
@@ -925,7 +997,8 @@ def main() -> None:
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
-            CommandHandler("menu", menu_command)
+            CommandHandler("menu", menu_command),
+            CommandHandler("quick_bottle", quick_bottle_command)
         ],
         states={
             SELECT_BABY: [
@@ -972,13 +1045,15 @@ def main() -> None:
         fallbacks=[
             CommandHandler("start", start),
             CommandHandler("help", help_command),
-            CommandHandler("menu", menu_command)
+            CommandHandler("menu", menu_command),
+            CommandHandler("quick_bottle", quick_bottle_command)
         ],
         allow_reentry=True
     )
     
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("quick_bottle", quick_bottle_command))
     
     # Add natural language query handler outside the conversation
     application.add_handler(MessageHandler(
