@@ -137,6 +137,15 @@ def get_baby(db, baby_id: int) -> Optional[Baby]:
     """Get a baby by ID."""
     return db.query(Baby).filter(Baby.id == baby_id).first()
 
+def update_baby_name(db, baby_id: int, new_name: str) -> Optional[Baby]:
+    """Update a baby's name."""
+    baby = db.query(Baby).filter(Baby.id == baby_id).first()
+    if baby:
+        baby.name = new_name
+        db.commit()
+        db.refresh(baby)
+    return baby
+
 def get_babies_by_user(db, user_id: int) -> List[Baby]:
     """Get all babies for a user."""
     return db.query(Baby).filter(Baby.parent_id == user_id).all()

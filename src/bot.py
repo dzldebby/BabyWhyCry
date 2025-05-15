@@ -28,7 +28,8 @@ logger = logging.getLogger(__name__)
 # Conversation states
 (SELECT_BABY, MAIN_MENU, FEEDING, FEEDING_TYPE, FEEDING_AMOUNT, 
  SLEEP, DIAPER, DIAPER_TYPE, CRYING, CRYING_REASON, 
- HISTORY, STATS, SETTINGS, ADD_BABY, NATURAL_LANGUAGE_QUERY) = range(15)
+ HISTORY, STATS, SETTINGS, ADD_BABY, NATURAL_LANGUAGE_QUERY,
+ CHANGE_BABY_NAME) = range(16)
 
 # Get a database session
 def get_db():
@@ -640,6 +641,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     elif action == "settings":
         keyboard = [
             [InlineKeyboardButton("👶 Add Another Baby", callback_data="add_baby")],
+            [InlineKeyboardButton("✏️ Change Baby Name", callback_data="change_baby_name")],
             [InlineKeyboardButton("🗑️ Remove Baby Data", callback_data="remove_baby")],
             [InlineKeyboardButton("↩️ Back to Menu", callback_data="back_to_menu")]
         ]
@@ -755,6 +757,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         # Go back to settings
         keyboard = [
             [InlineKeyboardButton("👶 Add Another Baby", callback_data="add_baby")],
+            [InlineKeyboardButton("✏️ Change Baby Name", callback_data="change_baby_name")],
             [InlineKeyboardButton("🗑️ Remove Baby Data", callback_data="remove_baby")],
             [InlineKeyboardButton("↩️ Back to Menu", callback_data="back_to_menu")]
         ]
@@ -767,6 +770,19 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             parse_mode='Markdown'
         )
         return SETTINGS
+    
+    elif action == "change_baby_name":
+        # Get current baby info
+        baby_id = context.user_data["baby_id"]
+        db = get_db()
+        baby = db.query(Baby).filter(Baby.id == baby_id).first()
+        
+        await query.edit_message_text(
+            f"Current baby name: *{baby.name}*\n\n"
+            "Please enter the new name for your baby:",
+            parse_mode='Markdown'
+        )
+        return CHANGE_BABY_NAME
     
     return MAIN_MENU
 
@@ -944,6 +960,46 @@ async def feeding_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         reply_markup=reply_markup
     )
     return FEEDING
+
+async def change_baby_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle changing a baby's name."""
+    new_name = update.message.text.strip()
+    
+    # Validate name
+    if not new_name:
+        await update.message.reply_text(
+            "The name cannot be empty. Please enter a valid name."
+        )
+        return CHANGE_BABY_NAME
+    
+    # Update the baby's name in the database
+    db = get_db()
+    baby_id = context.user_data["baby_id"]
+    
+    # Import the update_baby_name function
+    from database import update_baby_name
+    
+    baby = update_baby_name(db, baby_id, new_name)
+    
+    if baby:
+        # Success message
+        await update.message.reply_text(
+            f"✅ Baby's name has been successfully changed to *{new_name}*.",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("↩️ Back to Menu", callback_data="back_to_menu")]
+            ])
+        )
+    else:
+        # Error message
+        await update.message.reply_text(
+            "❌ Failed to update the baby's name. Please try again.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("↩️ Back to Settings", callback_data="back_to_settings")]
+            ])
+        )
+    
+    return MAIN_MENU
 
 async def sleep_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle sleep actions."""
@@ -1177,6 +1233,9 @@ def main() -> None:
             NATURAL_LANGUAGE_QUERY: [
                 CallbackQueryHandler(back_to_menu_action, pattern="back_to_menu"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_natural_language_query)
+            ],
+            CHANGE_BABY_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, change_baby_name)
             ]
         },
         fallbacks=[
