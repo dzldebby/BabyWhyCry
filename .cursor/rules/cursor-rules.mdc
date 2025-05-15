@@ -12,6 +12,8 @@ alwaysApply: false
 
 How to add new cursor rules to the project
 
+1. When displaying time, always display it in SGT (Singapore Time)
+
 1. Always place rule files in PROJECT_ROOT/.cursor/rules/:
     ```
     .cursor/rules/

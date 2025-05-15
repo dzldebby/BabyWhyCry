@@ -58,7 +58,8 @@ class QueryIntent:
 class DateTimeEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, datetime):
-            return obj.strftime("%Y-%m-%d %H:%M:%S")
+            # Use the format_datetime function to get proper timezone display
+            return format_datetime(obj)
         return super().default(obj)
 
 def classify_query(query_text: str) -> Tuple[str, Dict[str, Any]]:
@@ -244,9 +245,13 @@ def generate_response(intent: str, data: Dict[str, Any], query_text: str) -> str
                 formatted_time = format_datetime(sleep_time, include_seconds=False)
                 
                 if data.get("is_ongoing", False):
-                    return f"Baby started sleeping at {formatted_time} and is still sleeping. Duration so far: {data.get('duration_minutes', 0)} minutes."
+                    duration_min = data.get('duration_minutes', 0)
+                    return f"Baby started sleeping at {formatted_time} and is still sleeping. Duration so far: {duration_min} minutes."
                 else:
-                    return f"Baby last slept at {formatted_time} for {data.get('duration_minutes', 0)} minutes."
+                    duration_min = data.get('duration_minutes', 0)
+                    end_time = data.get("end_time")
+                    end_formatted = format_datetime(end_time, include_seconds=False) if end_time else "unknown time"
+                    return f"Baby last slept from {formatted_time} to {end_formatted} for {duration_min} minutes."
                     
         elif intent == "last_diaper" and data.get("found", False):
             diaper_time = data.get("time")
@@ -266,11 +271,15 @@ def generate_response(intent: str, data: Dict[str, Any], query_text: str) -> str
                 formatted_time = format_datetime(crying_time, include_seconds=False)
                 
                 if data.get("is_ongoing", False):
-                    return f"Baby started crying at {formatted_time} and is still crying. Duration so far: {data.get('duration_minutes', 0)} minutes."
+                    duration_min = data.get('duration_minutes', 0)
+                    return f"Baby started crying at {formatted_time} and is still crying. Duration so far: {duration_min} minutes."
                 else:
                     reason = data.get("reason")
                     reason_str = reason.value if hasattr(reason, 'value') else str(reason) if reason else "unknown reason"
-                    return f"Baby last cried at {formatted_time} for {data.get('duration_minutes', 0)} minutes. Reason: {reason_str}."
+                    duration_min = data.get('duration_minutes', 0)
+                    end_time = data.get("end_time")
+                    end_formatted = format_datetime(end_time, include_seconds=False) if end_time else "unknown time"
+                    return f"Baby last cried from {formatted_time} to {end_formatted} for {duration_min} minutes. Reason: {reason_str}."
             
         return "I'm sorry, I couldn't process your question with the AI. But I found the data you requested. Please check the history section for details."
 
