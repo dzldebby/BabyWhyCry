@@ -39,6 +39,17 @@ class SimpleHandler(BaseHTTPRequestHandler):
                     <li>Open your Telegram bot using: <code>https://t.me/your_bot_username?start=quick_bottle</code></li>
                     <li>Or use the <code>/quick_bottle</code> command in chat</li>
                 </ol>
+                <p><strong>First Time Setup:</strong></p>
+                <ol>
+                    <li>The first time you use the quick bottle feature, it will ask you to select which baby to feed if you have multiple babies</li>
+                    <li>If you only have one baby registered, it will automatically select that baby</li>
+                    <li>After a baby is selected, the bottle feeding will start immediately</li>
+                </ol>
+                <p><strong>Ending the Feeding:</strong></p>
+                <ol>
+                    <li>To end the feeding, tap the "Done Feeding" button or type <code>/done</code> in the chat</li>
+                    <li>For bottle feedings, you'll be asked to input the amount after ending</li>
+                </ol>
                 <p><strong>Android Instructions:</strong></p>
                 <ol>
                     <li>Create a home screen shortcut pointing to <code>https://t.me/your_bot_username?start=quick_bottle</code></li>

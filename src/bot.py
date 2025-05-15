@@ -83,7 +83,57 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     deep_link = args[0] if args else None
     
     # Handle quick bottle feed deep link
-    if deep_link == "quick_bottle" and "baby_id" in context.user_data:
+    if deep_link == "quick_bottle":
+        # Check if the user has babies first
+        if db_user.babies:
+            # If user has only one baby, auto-select it
+            if len(db_user.babies) == 1:
+                baby = db_user.babies[0]
+                baby_id = baby.id
+                context.user_data["baby_id"] = baby_id
+                
+                # Start a bottle feeding
+                try:
+                    feeding = start_feeding(db, baby_id, FeedingType.BOTTLE)
+                    context.user_data["current_feeding_id"] = feeding.id
+                    await update.message.reply_text(
+                        f"✅ Quick bottle feeding started for {baby.name}!\n\n"
+                        "I'll ask for the amount when you're done. To end the feeding, "
+                        "tap the button below or send /done",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("✅ Done Feeding", callback_data="done_feeding")]
+                        ])
+                    )
+                    return FEEDING
+                except Exception as e:
+                    logger.error(f"Error starting quick bottle feeding: {e}")
+                    await update.message.reply_text(
+                        "Sorry, there was an error starting the feeding. Please try again."
+                    )
+                    return await menu_command(update, context)
+            else:
+                # If multiple babies, show a special baby selection for quick bottle
+                keyboard = []
+                for baby in db_user.babies:
+                    keyboard.append([InlineKeyboardButton(f"🍼 {baby.name}", callback_data=f"quick_bottle_{baby.id}")])
+                
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await update.message.reply_text(
+                    "Please select which baby to start a bottle feeding for:",
+                    reply_markup=reply_markup
+                )
+                return SELECT_BABY
+        else:
+            # No babies yet, prompt to add one
+            await update.message.reply_text(
+                "Welcome to Baby Alert! 👶\n\n"
+                "Before using quick bottle feeding, you need to add a baby first. "
+                "Please send me your baby's name."
+            )
+            return ADD_BABY
+    # Handle the case when baby is already selected (for existing users)
+    elif deep_link == "quick_bottle" and "baby_id" in context.user_data:
         baby_id = context.user_data["baby_id"]
         baby = db.query(Baby).filter(Baby.id == baby_id).first()
         
@@ -107,10 +157,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                     "Sorry, there was an error starting the feeding. Please try again."
                 )
                 return await menu_command(update, context)
-        else:
-            await update.message.reply_text(
-                "You need to select a baby first before using quick feeding."
-            )
     # Check if user has babies
     elif not db_user.babies:
         await update.message.reply_text(
@@ -139,7 +185,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/start - Start the bot and select a baby\n"
         "/help - Show this help message\n"
         "/menu - Show the main menu\n"
-        "/quick_bottle - Start a quick bottle feeding\n\n"
+        "/quick_bottle - Start a quick bottle feeding\n"
+        "/done - End the current feeding session\n\n"
         "*What can this bot do?*\n"
         "- Track feedings (breast, bottle, solid)\n"
         "- Track sleep periods\n"
@@ -304,22 +351,59 @@ async def baby_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return ADD_BABY
     
-    baby_id = int(query.data.split('_')[1])
-    context.user_data["baby_id"] = baby_id
+    # Handle quick bottle feeding selection
+    elif query.data.startswith("quick_bottle_"):
+        baby_id = int(query.data.split('_')[2])
+        context.user_data["baby_id"] = baby_id
+        
+        db = get_db()
+        baby = db.query(Baby).filter(Baby.id == baby_id).first()
+        
+        # Start a bottle feeding
+        try:
+            feeding = start_feeding(db, baby_id, FeedingType.BOTTLE)
+            context.user_data["current_feeding_id"] = feeding.id
+            await query.edit_message_text(
+                f"✅ Quick bottle feeding started for {baby.name}!\n\n"
+                "I'll ask for the amount when you're done. To end the feeding, "
+                "tap the button below or send /done",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✅ Done Feeding", callback_data="done_feeding")]
+                ])
+            )
+            return FEEDING
+        except Exception as e:
+            logger.error(f"Error starting quick bottle feeding: {e}")
+            await query.edit_message_text(
+                "Sorry, there was an error starting the feeding. Please try again."
+            )
+            reply_markup = InlineKeyboardMarkup(get_main_menu_keyboard())
+            await query.edit_message_text(
+                f"👶 *{baby.name}* selected!\n\n"
+                "What would you like to do?",
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+            return MAIN_MENU
     
-    db = get_db()
-    baby = db.query(Baby).filter(Baby.id == baby_id).first()
-    
-    reply_markup = InlineKeyboardMarkup(get_main_menu_keyboard())
-    
-    await query.edit_message_text(
-        f"👶 *{baby.name}* selected!\n\n"
-        "What would you like to do?",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
-    
-    return MAIN_MENU
+    # Normal baby selection
+    else:
+        baby_id = int(query.data.split('_')[1])
+        context.user_data["baby_id"] = baby_id
+        
+        db = get_db()
+        baby = db.query(Baby).filter(Baby.id == baby_id).first()
+        
+        reply_markup = InlineKeyboardMarkup(get_main_menu_keyboard())
+        
+        await query.edit_message_text(
+            f"👶 *{baby.name}* selected!\n\n"
+            "What would you like to do?",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        
+        return MAIN_MENU
 
 async def add_baby_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle adding a new baby."""
@@ -747,13 +831,31 @@ async def feeding_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return FEEDING_AMOUNT
     
-    elif query.data == "end_feeding":
+    elif query.data == "end_feeding" or query.data == "done_feeding":
         db = get_db()
-        feeding_id = context.user_data["feeding_id"]
+        feeding_id = context.user_data.get("feeding_id") or context.user_data.get("current_feeding_id")
+        if not feeding_id:
+            await query.edit_message_text(
+                "Sorry, I couldn't find the current feeding session. Please try again.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("↩️ Back to Menu", callback_data="back_to_menu")]
+                ])
+            )
+            return MAIN_MENU
+            
         feeding = end_feeding(db, feeding_id)
         
         # Calculate duration
         duration = (feeding.end_time - feeding.start_time).total_seconds() / 60
+        
+        # Ask for amount if it's a bottle feeding and no amount recorded yet
+        if feeding.type == FeedingType.BOTTLE and not feeding.amount:
+            await query.edit_message_text(
+                f"Bottle feeding ended at {format_datetime(feeding.end_time, include_seconds=True)}.\n"
+                f"Duration: {duration:.0f} minutes.\n\n"
+                f"Please enter the amount in ml or oz:",
+            )
+            return FEEDING_AMOUNT
         
         keyboard = [
             [InlineKeyboardButton("↩️ Back to Menu", callback_data="back_to_menu")]
@@ -778,6 +880,39 @@ async def feeding_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return MAIN_MENU
     
     return FEEDING
+
+async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """End current feeding session when /done command is used."""
+    if "current_feeding_id" not in context.user_data and "feeding_id" not in context.user_data:
+        await update.message.reply_text(
+            "There is no active feeding session to end."
+        )
+        return await menu_command(update, context)
+    
+    db = get_db()
+    feeding_id = context.user_data.get("current_feeding_id") or context.user_data.get("feeding_id")
+    feeding = end_feeding(db, feeding_id)
+    
+    # Calculate duration
+    duration = (feeding.end_time - feeding.start_time).total_seconds() / 60
+    
+    # Check if this is a bottle feeding without amount
+    if feeding.type == FeedingType.BOTTLE and not feeding.amount:
+        await update.message.reply_text(
+            f"Bottle feeding ended at {format_datetime(feeding.end_time, include_seconds=True)}.\n"
+            f"Duration: {duration:.0f} minutes.\n\n"
+            f"Please enter the amount in ml or oz:"
+        )
+        return FEEDING_AMOUNT
+    
+    await update.message.reply_text(
+        f"Feeding ended at {format_datetime(feeding.end_time, include_seconds=True)}.\n"
+        f"Duration: {duration:.0f} minutes.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("↩️ Back to Menu", callback_data="back_to_menu")]
+        ])
+    )
+    return MAIN_MENU
 
 async def feeding_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle feeding amount input."""
@@ -998,7 +1133,8 @@ def main() -> None:
         entry_points=[
             CommandHandler("start", start),
             CommandHandler("menu", menu_command),
-            CommandHandler("quick_bottle", quick_bottle_command)
+            CommandHandler("quick_bottle", quick_bottle_command),
+            CommandHandler("done", done_command)
         ],
         states={
             SELECT_BABY: [
@@ -1014,7 +1150,8 @@ def main() -> None:
                 CallbackQueryHandler(feeding_type_selection)
             ],
             FEEDING: [
-                CallbackQueryHandler(feeding_action)
+                CallbackQueryHandler(feeding_action),
+                CommandHandler("done", done_command)
             ],
             FEEDING_AMOUNT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, feeding_amount)
@@ -1046,7 +1183,8 @@ def main() -> None:
             CommandHandler("start", start),
             CommandHandler("help", help_command),
             CommandHandler("menu", menu_command),
-            CommandHandler("quick_bottle", quick_bottle_command)
+            CommandHandler("quick_bottle", quick_bottle_command),
+            CommandHandler("done", done_command)
         ],
         allow_reentry=True
     )
@@ -1054,6 +1192,7 @@ def main() -> None:
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("quick_bottle", quick_bottle_command))
+    application.add_handler(CommandHandler("done", done_command))
     
     # Add natural language query handler outside the conversation
     application.add_handler(MessageHandler(

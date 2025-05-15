@@ -458,11 +458,19 @@ def get_baby_stats(db, baby_id: int, days: int = 1) -> Dict[str, Any]:
     
     total_sleep_seconds = 0
     for sleep in sleep_query:
+        sleep_start = sleep.start_time
+        if sleep_start.tzinfo is None:
+            sleep_start = utc_to_sgt(sleep_start)
+            
         if sleep.end_time:
-            total_sleep_seconds += (sleep.end_time - sleep.start_time).total_seconds()
+            sleep_end = sleep.end_time
+            if sleep_end.tzinfo is None:
+                sleep_end = utc_to_sgt(sleep_end)
+                
+            total_sleep_seconds += (sleep_end - sleep_start).total_seconds()
         else:
             # For ongoing sleep, count up to now
-            total_sleep_seconds += (get_sgt_now() - sleep.start_time).total_seconds()
+            total_sleep_seconds += (get_sgt_now() - sleep_start).total_seconds()
     
     total_sleep_hours = total_sleep_seconds / 3600
     
@@ -574,7 +582,13 @@ def get_last_sleep(db, baby_id: int) -> Dict[str, Any]:
         result["is_ongoing"] = False
     else:
         # Calculate duration up to now for ongoing sleep
-        duration_minutes = (get_sgt_now() - sleep.start_time).total_seconds() / 60
+        # Ensure both datetimes are timezone-aware before subtraction
+        start_time = sleep.start_time
+        if start_time.tzinfo is None:
+            # If start_time is naive, apply timezone info using utc_to_sgt
+            start_time = utc_to_sgt(start_time)
+            
+        duration_minutes = (get_sgt_now() - start_time).total_seconds() / 60
         result["duration_minutes"] = round(duration_minutes)
         result["is_ongoing"] = True
     
@@ -618,7 +632,13 @@ def get_last_crying(db, baby_id: int) -> Dict[str, Any]:
         result["is_ongoing"] = False
     else:
         # Calculate duration up to now for ongoing crying
-        duration_minutes = (get_sgt_now() - crying.start_time).total_seconds() / 60
+        # Ensure both datetimes are timezone-aware before subtraction
+        start_time = crying.start_time
+        if start_time.tzinfo is None:
+            # If start_time is naive, apply timezone info using utc_to_sgt
+            start_time = utc_to_sgt(start_time)
+            
+        duration_minutes = (get_sgt_now() - start_time).total_seconds() / 60
         result["duration_minutes"] = round(duration_minutes)
         result["is_ongoing"] = True
     
@@ -682,10 +702,16 @@ def get_sleep_duration(db, baby_id: int, start_time: datetime = None, end_time: 
     if not start_time:
         # Default to today
         now = get_sgt_now()
-        start_time = datetime(now.year, now.month, now.day)
+        start_time = datetime(now.year, now.month, now.day, tzinfo=now.tzinfo)
+    elif start_time.tzinfo is None:
+        # Ensure start_time has timezone info
+        start_time = utc_to_sgt(start_time)
     
     if not end_time:
         end_time = get_sgt_now()
+    elif end_time.tzinfo is None:
+        # Ensure end_time has timezone info
+        end_time = utc_to_sgt(end_time)
     
     # Get all sleep sessions in the time period
     sleep_sessions = db.query(Sleep).filter(
@@ -699,12 +725,20 @@ def get_sleep_duration(db, baby_id: int, start_time: datetime = None, end_time: 
     ongoing_sessions = 0
     
     for sleep in sleep_sessions:
+        sleep_start = sleep.start_time
+        if sleep_start.tzinfo is None:
+            sleep_start = utc_to_sgt(sleep_start)
+            
         if sleep.end_time:
-            total_sleep_seconds += (sleep.end_time - sleep.start_time).total_seconds()
+            sleep_end = sleep.end_time
+            if sleep_end.tzinfo is None:
+                sleep_end = utc_to_sgt(sleep_end)
+                
+            total_sleep_seconds += (sleep_end - sleep_start).total_seconds()
             completed_sessions += 1
         else:
             # For ongoing sleep, count up to now
-            total_sleep_seconds += (get_sgt_now() - sleep.start_time).total_seconds()
+            total_sleep_seconds += (get_sgt_now() - sleep_start).total_seconds()
             ongoing_sessions += 1
     
     total_sleep_hours = total_sleep_seconds / 3600
@@ -838,17 +872,44 @@ def get_baby_schedule(db, baby_id: int, days: int = 3) -> Dict[str, Any]:
     # Calculate average intervals
     feeding_intervals = []
     for i in range(1, len(feedings)):
-        interval = (feedings[i].start_time - feedings[i-1].start_time).total_seconds() / 3600
+        prev_time = feedings[i-1].start_time
+        curr_time = feedings[i].start_time
+        
+        # Ensure both times have timezone info
+        if prev_time.tzinfo is None:
+            prev_time = utc_to_sgt(prev_time)
+        if curr_time.tzinfo is None:
+            curr_time = utc_to_sgt(curr_time)
+            
+        interval = (curr_time - prev_time).total_seconds() / 3600
         feeding_intervals.append(interval)
     
     sleep_intervals = []
     for i in range(1, len(sleeps)):
-        interval = (sleeps[i].start_time - sleeps[i-1].start_time).total_seconds() / 3600
+        prev_time = sleeps[i-1].start_time
+        curr_time = sleeps[i].start_time
+        
+        # Ensure both times have timezone info
+        if prev_time.tzinfo is None:
+            prev_time = utc_to_sgt(prev_time)
+        if curr_time.tzinfo is None:
+            curr_time = utc_to_sgt(curr_time)
+            
+        interval = (curr_time - prev_time).total_seconds() / 3600
         sleep_intervals.append(interval)
     
     diaper_intervals = []
     for i in range(1, len(diapers)):
-        interval = (diapers[i].time - diapers[i-1].time).total_seconds() / 3600
+        prev_time = diapers[i-1].time
+        curr_time = diapers[i].time
+        
+        # Ensure both times have timezone info
+        if prev_time.tzinfo is None:
+            prev_time = utc_to_sgt(prev_time)
+        if curr_time.tzinfo is None:
+            curr_time = utc_to_sgt(curr_time)
+            
+        interval = (curr_time - prev_time).total_seconds() / 3600
         diaper_intervals.append(interval)
     
     # Calculate averages
@@ -860,7 +921,16 @@ def get_baby_schedule(db, baby_id: int, days: int = 3) -> Dict[str, Any]:
     sleep_durations = []
     for sleep in sleeps:
         if sleep.end_time:
-            duration = (sleep.end_time - sleep.start_time).total_seconds() / 3600
+            start_time = sleep.start_time
+            end_time = sleep.end_time
+            
+            # Ensure both times have timezone info
+            if start_time.tzinfo is None:
+                start_time = utc_to_sgt(start_time)
+            if end_time.tzinfo is None:
+                end_time = utc_to_sgt(end_time)
+                
+            duration = (end_time - start_time).total_seconds() / 3600
             sleep_durations.append(duration)
     
     avg_sleep_duration = sum(sleep_durations) / len(sleep_durations) if sleep_durations else 0
